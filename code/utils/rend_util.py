@@ -53,31 +53,44 @@ def load_K_Rt_from_P(filename, P=None):
 
 
 def get_camera_params(uv, pose, intrinsics):
-    if pose.shape[1] == 7: #In case of quaternion vector representation
+    """ Rays Sampling Function(a little bit weird)
+    Arguments:
+        uv         - (batch_size, H*W, 2), grid coordinate of each pixel in the image
+        pose       - (batch_size, 4, 4), camera extrinsics of this batch
+        intrinsics - (batch_size, 4, 4), camera intrinsics of this batch
+    Returns:
+        ray_dirs - (batch_size, H*W, 3), rays direction in world coordinate
+        cam_loc  - (batch_size, 3), rays origin in world coordinate
+    """
+    # in case of quaternion vector representation
+    if pose.shape[1] == 7:
         cam_loc = pose[:, 4:]
         R = quat_to_rot(pose[:,:4])
         p = torch.eye(4).repeat(pose.shape[0],1,1).cuda().float()
         p[:, :3, :3] = R
         p[:, :3, 3] = cam_loc
-    else: # In case of pose matrix representation
-        cam_loc = pose[:, :3, 3]
-        p = pose
+    # in case of pose matrix representation
+    else:
+        cam_loc = pose[:, :3, 3]    # (batch_size, 3), namely camera/ray origin
+        p = pose                    # (batch_size, 4, 4)
 
     batch_size, num_samples, _ = uv.shape
+    depth = torch.ones((batch_size, num_samples)).cuda()    # (batch_size, H*W), all 1
+    x_cam = uv[:, :, 0].view(batch_size, -1)                # (batch_size, H*W), x index
+    y_cam = uv[:, :, 1].view(batch_size, -1)                # (batch_size, H*W), y index
+    z_cam = depth.view(batch_size, -1)                      # (batch_size, H*W)
 
-    depth = torch.ones((batch_size, num_samples)).cuda()
-    x_cam = uv[:, :, 0].view(batch_size, -1)
-    y_cam = uv[:, :, 1].view(batch_size, -1)
-    z_cam = depth.view(batch_size, -1)
-
-    pixel_points_cam = lift(x_cam, y_cam, z_cam, intrinsics=intrinsics)
+    # transform from image coordinate to camera coordinate
+    pixel_points_cam = lift(x_cam, y_cam, z_cam, intrinsics=intrinsics) # (batch_size, H*W, 4)
 
     # permute for batch matrix product
-    pixel_points_cam = pixel_points_cam.permute(0, 2, 1)
+    pixel_points_cam = pixel_points_cam.permute(0, 2, 1)    # (batch_size, 4, H*W)
 
-    world_coords = torch.bmm(p, pixel_points_cam).permute(0, 2, 1)[:, :, :3]
-    ray_dirs = world_coords - cam_loc[:, None, :]
-    ray_dirs = F.normalize(ray_dirs, dim=2)
+    # transform from camera coordinate to world coordinate
+    world_coords = torch.bmm(p, pixel_points_cam).permute(0, 2, 1)[:, :, :3]    # (batch_size, H*W, 3)
+    ray_dirs = world_coords - cam_loc[:, None, :]   # (batch_size, H*W, 3)
+    # normalize the rays direction
+    ray_dirs = F.normalize(ray_dirs, dim=2)         # (batch_size, H*W, 3)
 
     return ray_dirs, cam_loc
 
@@ -95,12 +108,12 @@ def get_camera_for_plot(pose):
 
 def lift(x, y, z, intrinsics):
     # parse intrinsics
-    intrinsics = intrinsics.cuda()
-    fx = intrinsics[:, 0, 0]
-    fy = intrinsics[:, 1, 1]
-    cx = intrinsics[:, 0, 2]
-    cy = intrinsics[:, 1, 2]
-    sk = intrinsics[:, 0, 1]
+    intrinsics = intrinsics.cuda()  # (batch_size, 4, 4)
+    fx = intrinsics[:, 0, 0]        # (batch_size,)
+    fy = intrinsics[:, 1, 1]        # (batch_size,)
+    cx = intrinsics[:, 0, 2]        # (batch_size,)
+    cy = intrinsics[:, 1, 2]        # (batch_size,)
+    sk = intrinsics[:, 0, 1]        # (batch_size,)
 
     x_lift = (x - cx.unsqueeze(-1) + cy.unsqueeze(-1)*sk.unsqueeze(-1)/fy.unsqueeze(-1) - sk.unsqueeze(-1)*y/fy.unsqueeze(-1)) / fx.unsqueeze(-1) * z
     y_lift = (y - cy.unsqueeze(-1)) / fy.unsqueeze(-1) * z
@@ -151,11 +164,14 @@ def rot_to_quat(R):
 
 
 def get_sphere_intersections(cam_loc, ray_directions, r = 1.0):
-    # Input: n_rays x 3 ; n_rays x 3
-    # Output: n_rays x 1, n_rays x 1 (close and far)
-
-    ray_cam_dot = torch.bmm(ray_directions.view(-1, 1, 3),
-                            cam_loc.view(-1, 3, 1)).squeeze(-1)
+    """ 
+    Arguments:
+        cam_loc        - (batch_size*H*W, 3), rays origin in world coordinate
+        ray_directions - (batch_size*H*W, 3), rays direction in world coordinate
+    Returns:
+        sphere_intersections - 
+    """
+    ray_cam_dot = torch.bmm(ray_directions.view(-1, 1, 3), cam_loc.view(-1, 3, 1)).squeeze(-1)
     under_sqrt = ray_cam_dot ** 2 - (cam_loc.norm(2, 1, keepdim=True) ** 2 - r ** 2)
 
     # sanity check

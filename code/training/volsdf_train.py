@@ -10,21 +10,23 @@ import utils.plots as plt
 from utils import rend_util
 
 class VolSDFTrainRunner():
-    def __init__(self,**kwargs):
+    def __init__(self, **kwargs):
         torch.set_default_dtype(torch.float32)
         torch.set_num_threads(1)
 
-        self.conf = ConfigFactory.parse_file(kwargs['conf'])
-        self.batch_size = kwargs['batch_size']
-        self.nepochs = kwargs['nepochs']
-        self.exps_folder_name = kwargs['exps_folder_name']
+        self.conf = ConfigFactory.parse_file(kwargs['conf'])    # configuration path, default='./confs/dtu.conf'
+        self.batch_size = kwargs['batch_size']                  # batch size to train for
+        self.nepochs = kwargs['nepochs']                        # number of epochs to train for
+        self.exps_folder_name = kwargs['exps_folder_name']      # experiment folder we're gonna mkdir
         self.GPU_INDEX = kwargs['gpu_index']
 
+        # get final experiment name for this configuration
         self.expname = self.conf.get_string('train.expname') + kwargs['expname']
         scan_id = kwargs['scan_id'] if kwargs['scan_id'] != -1 else self.conf.get_int('dataset.scan_id', default=-1)
         if scan_id != -1:
             self.expname = self.expname + '_{0}'.format(scan_id)
 
+        # get 'timestamp' and æis_continue' configuration
         if kwargs['is_continue'] and kwargs['timestamp'] == 'latest':
             if os.path.exists(os.path.join('../',kwargs['exps_folder_name'],self.expname)):
                 timestamps = os.listdir(os.path.join('../',kwargs['exps_folder_name'],self.expname))
@@ -41,22 +43,21 @@ class VolSDFTrainRunner():
             timestamp = kwargs['timestamp']
             is_continue = kwargs['is_continue']
 
-        utils.mkdir_ifnotexists(os.path.join('../',self.exps_folder_name))
+        # create folders for this experiment
+        utils.mkdir_ifnotexists(os.path.join('../', self.exps_folder_name))     # create exp root folder 'self.exps_folder_name'
         self.expdir = os.path.join('../', self.exps_folder_name, self.expname)
-        utils.mkdir_ifnotexists(self.expdir)
+        utils.mkdir_ifnotexists(self.expdir)                                    # create exp folder 'self.expname' inside 'self.exps_folder_name'
         self.timestamp = '{:%Y_%m_%d_%H_%M_%S}'.format(datetime.now())
-        utils.mkdir_ifnotexists(os.path.join(self.expdir, self.timestamp))
-
+        utils.mkdir_ifnotexists(os.path.join(self.expdir, self.timestamp))      # create timestamp folder inside 'self.expname'
+        # create plots dirs
         self.plots_dir = os.path.join(self.expdir, self.timestamp, 'plots')
-        utils.mkdir_ifnotexists(self.plots_dir)
-
+        utils.mkdir_ifnotexists(self.plots_dir)                                 # create plots folder inside 'self.timestamp'
         # create checkpoints dirs
         self.checkpoints_path = os.path.join(self.expdir, self.timestamp, 'checkpoints')
         utils.mkdir_ifnotexists(self.checkpoints_path)
         self.model_params_subdir = "ModelParameters"
         self.optimizer_params_subdir = "OptimizerParameters"
         self.scheduler_params_subdir = "SchedulerParameters"
-
         utils.mkdir_ifnotexists(os.path.join(self.checkpoints_path, self.model_params_subdir))
         utils.mkdir_ifnotexists(os.path.join(self.checkpoints_path, self.optimizer_params_subdir))
         utils.mkdir_ifnotexists(os.path.join(self.checkpoints_path, self.scheduler_params_subdir))
@@ -69,19 +70,21 @@ class VolSDFTrainRunner():
         print('shell command : {0}'.format(' '.join(sys.argv)))
 
         print('Loading data ...')
-
+        # get dataset configurations: 'data_dir', 'img_res', scan_id'
         dataset_conf = self.conf.get_config('dataset')
         if kwargs['scan_id'] != -1:
             dataset_conf['scan_id'] = kwargs['scan_id']
-
+        # import module 'SceneDataset' and create dataset for this experiment
         self.train_dataset = utils.get_class(self.conf.get_string('train.dataset_class'))(**dataset_conf)
-
+        # get total number of images in the dataset
         self.ds_len = len(self.train_dataset)
         print('Finish loading data. Data-set size: {0}'.format(self.ds_len))
-        if scan_id < 24 and scan_id > 0: # BlendedMVS, running for 200k iterations
+        # BlendedMVS, running for 200k iterations
+        if scan_id < 24 and scan_id > 0:
             self.nepochs = int(200000 / self.ds_len)
             print('RUNNING FOR {0}'.format(self.nepochs))
 
+        # use torch.utils.data.DataLoader() to create dataloader over dataset
         self.train_dataloader = torch.utils.data.DataLoader(self.train_dataset,
                                                             batch_size=self.batch_size,
                                                             shuffle=True,
@@ -102,7 +105,7 @@ class VolSDFTrainRunner():
 
         self.lr = self.conf.get_float('train.learning_rate')
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
-        # Exponential learning rate scheduler
+        # exponential learning rate scheduler
         decay_rate = self.conf.get_float('train.sched_decay_rate', default=0.1)
         decay_steps = self.nepochs * len(self.train_dataset)
         self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, decay_rate ** (1./decay_steps))
@@ -201,9 +204,9 @@ class VolSDFTrainRunner():
             self.train_dataset.change_sampling_idx(self.num_pixels)
 
             for data_index, (indices, model_input, ground_truth) in enumerate(self.train_dataloader):
-                model_input["intrinsics"] = model_input["intrinsics"].cuda()
-                model_input["uv"] = model_input["uv"].cuda()
-                model_input['pose'] = model_input['pose'].cuda()
+                model_input["intrinsics"] = model_input["intrinsics"].cuda()    # (batch_size, 4, 4)
+                model_input["uv"] = model_input["uv"].cuda()                    # (batch_size, H*W, 2)
+                model_input['pose'] = model_input['pose'].cuda()                # (batch_size, 4, 4)
 
                 model_outputs = self.model(model_input)
                 loss_output = self.loss(model_outputs, ground_truth)

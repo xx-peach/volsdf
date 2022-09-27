@@ -13,7 +13,8 @@ class Density(nn.Module):
         return self.density_func(sdf, beta=beta)
 
 
-class LaplaceDensity(Density):  # alpha * Laplace(loc=0, scale=beta).cdf(-sdf)
+class LaplaceDensity(Density):
+    """ alpha * Laplace(loc=0, scale=beta).cdf(-sdf) """
     def __init__(self, params_init={}, beta_min=0.0001):
         super().__init__(params_init=params_init)
         self.beta_min = torch.tensor(beta_min).cuda()
